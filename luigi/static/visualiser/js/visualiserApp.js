@@ -136,7 +136,7 @@ function visualiserApp(luigi) {
         loadTemplates();
         luigi.getFailedTaskList(function(failedTasks) {
             luigi.getUpstreamFailedTaskList(function(upstreamFailedTasks) {
-                    luigi.getDoneTaskList(function(doneTasks) {
+                luigi.getDoneTaskList(function(doneTasks) {
                     $("#failedTasks").append(renderTasks(failedTasks));
                     $("#upstreamFailedTasks").append(renderTasks(upstreamFailedTasks));
                     $("#doneTasks").append(renderTasks(doneTasks));
