@@ -10,10 +10,12 @@ Graph = (function() {
         var deps = task.deps;
         deps.sort();
         return {
+            name: task.name,
             taskId: task.taskId,
             status: task.status,
             trackingUrl: "#"+task.taskId,
             deps: deps,
+            params: task.params,
             depth: -1
         };
     }
@@ -151,7 +153,15 @@ Graph = (function() {
             var g = $(svgElement("g"))
                 .addClass("node")
                 .attr("transform", "translate(" + node.x + "," + node.y +")")
+                .attr("title", "translate(" + node.x + "," + node.y +")")
+                .tooltip(
+                    {
+                        content: function() {
+                            return $(this).attr('title');
+                        }
+                    })
                 .appendTo(self.svg);
+
             $(svgElement("circle"))
                 .addClass("nodeCircle")
                 .attr("r", 7)
@@ -166,6 +176,13 @@ Graph = (function() {
                 .attr("data-task-status", node.status)
                 .attr("data-task-id", node.taskId)
                 .appendTo(g);
+
+            var titleText = node.name + '<br/>';
+            $.each(node.params, function (param_name, param_value) {
+                titleText += param_name + "=" + param_value + '<br/>';
+            });
+            g.attr("title", $.trim(titleText))
+                .tooltip();
         });
     };
 
