@@ -30,7 +30,7 @@ function visualiserApp(luigi) {
             displayTime: displayTime,
             trackingUrl: task.trackingUrl,
             status: task.status,
-            graph: task.status == "PENDING"
+            graph: (task.status == "PENDING" || task.status == "DONE")
         };
     }
 
