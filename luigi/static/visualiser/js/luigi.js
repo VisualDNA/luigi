@@ -53,6 +53,12 @@ var LuigiAPI = (function() {
     };
     
     LuigiAPI.prototype.getRunningTaskList = function(callback) {
+        jsonRPC(this.urlRoot + "/task_list", {status: "RUNNING", upstream_status: "RUNNING"}, function(response) {
+            callback(flatten(response.response));
+        });
+    };
+    
+    LuigiAPI.prototype.getDoneTaskList = function(callback) {
         jsonRPC(this.urlRoot + "/task_list", {status: "DONE", upstream_status: ""}, function(response) {
             callback(flatten(response.response));
         });

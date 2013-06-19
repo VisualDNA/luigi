@@ -134,13 +134,21 @@ function visualiserApp(luigi) {
 
     $(document).ready(function() {
         loadTemplates();
+        
         luigi.getFailedTaskList(function(failedTasks) {
             luigi.getUpstreamFailedTaskList(function(upstreamFailedTasks) {
-                $("#failedTasks").append(renderTasks(failedTasks));
-                $("#upstreamFailedTasks").append(renderTasks(upstreamFailedTasks));
-                bindListEvents();
+                luigi.getDoneTaskList(function(doneTasks) {
+                	luigi.getRunningTaskList(function(runningTasks) {
+                    	$("#failedTasks").append(renderTasks(failedTasks));
+                    	$("#upstreamFailedTasks").append(renderTasks(upstreamFailedTasks));
+                    	$("#doneTasks").append(renderTasks(doneTasks));
+                    	$("#runningTasks").append(renderTasks(runningTasks));
+                    	bindListEvents();
+                 	});
+                });
             });
         });
+        
         var graph = new Graph.DependencyGraph($("#graphPlaceholder")[0]);
         $("#graphPlaceholder")[0].graph = graph;
         processHashChange();
