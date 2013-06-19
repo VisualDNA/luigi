@@ -42,6 +42,11 @@
           stroke-opacity: .6;
         }
 
+        .error {
+          color: red;
+          font-weight: bold
+        }
+
         svg {
             border:1px solid #DDDDDD;
             overflow:scroll;
@@ -111,6 +116,8 @@
                       <button type="submit" class="btn">Show task details</button>
                     </form>
                   </div>
+                </div>
+                <div id="searchError" class="container-fluid error">
                 </div>
                 <div id="graphContainer" class="container-fluid">
                     <h4 id="dependencyTitle"></h4>
