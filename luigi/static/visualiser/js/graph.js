@@ -1,10 +1,18 @@
 Graph = (function() {
     var statusColors = {
         "FAILED":"#DD0000",
-        "DONE":"#00DD00",
+        "RUNNING":"#0044DD",
         "PENDING":"#EEBB00",
-        "RUNNING":"#0044DD"
+        "DONE":"#00DD00"
     };
+
+    /* Line height for items in task status legend */
+    var legendLineHeight = 20;
+
+    /* Calculate minimum SVG height required for legend */
+    var legendMaxY = (function () {
+        return Object.keys(statusColors).length * legendLineHeight + ( legendLineHeight / 2 )
+    })();
 
     function nodeFromTask(task) {
         var deps = task.deps;
@@ -104,7 +112,7 @@ Graph = (function() {
 
     function findBounds(nodes) {
         var maxX = 0;
-        var maxY = 0;
+        var maxY = legendMaxY;
         $.each(nodes, function(i, node) {
             if (node.x>maxX) maxX = node.x;
             if (node.y>maxY) maxY = node.y;
@@ -166,6 +174,39 @@ Graph = (function() {
                 .attr("data-task-status", node.status)
                 .attr("data-task-id", node.taskId)
                 .appendTo(g);
+        });
+
+        // Legend for Task status
+        var legend = $(svgElement("g"))
+                .addClass("legend")
+                .appendTo(self.svg)
+
+        $(svgElement("rect"))
+            .attr("x", -1)
+            .attr("y", -1)
+            .attr("width", "100px")
+            .attr("height", legendMaxY + "px")
+            .attr("fill", "#FFF")
+            .attr("stroke", "#DDD")
+            .appendTo(legend);
+
+        var x = 0;
+        $.each(statusColors, function(key, color) {
+            var c = $(svgElement("circle"))
+                .addClass("nodeCircle")
+                .attr("r", 7)
+                .attr("cx", legendLineHeight)
+                .attr("cy", (legendLineHeight-4)+(x*legendLineHeight))
+                .attr("fill", color)
+                .appendTo(legend)
+
+            $(svgElement("text"))
+                .text(key.charAt(0).toUpperCase() + key.substring(1).toLowerCase())
+                .attr("x", legendLineHeight + 14)
+                .attr("y", legendLineHeight+(x*legendLineHeight))
+                .appendTo(legend);
+
+            x++;
         });
     };
 
