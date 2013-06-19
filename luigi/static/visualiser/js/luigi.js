@@ -64,6 +64,12 @@ var LuigiAPI = (function() {
         });
     };
 
+    LuigiAPI.prototype.getPendingTaskList = function(callback) {
+        jsonRPC(this.urlRoot + "/task_list", {status: "PENDING", upstream_status: ""}, function(response) {
+            callback(flatten(response.response));
+        });
+    };
+
     LuigiAPI.prototype.getErrorTrace = function(taskId, callback) {
         jsonRPC(this.urlRoot + "/fetch_error", {task_id: taskId}, function(response) {
             callback(response.response);

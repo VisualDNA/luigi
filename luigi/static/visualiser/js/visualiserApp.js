@@ -145,12 +145,14 @@ function visualiserApp(luigi) {
         luigi.getFailedTaskList(function(failedTasks) {
             luigi.getUpstreamFailedTaskList(function(upstreamFailedTasks) {
             	luigi.getRunningTaskList(function(runningTasks) {
-                    luigi.getDoneTaskList(function(doneTasks) {
-                        $("#failedTasks").append(renderTasks(failedTasks));
-                        $("#upstreamFailedTasks").append(renderTasks(upstreamFailedTasks));
-                	    $("#runningTasks").append(renderTasks(runningTasks));
-                        $("#doneTasks").append(renderTasks(doneTasks));
-                        bindListEvents();
+                    luigi.getPendingTaskList(function(pendingTasks) {
+                        luigi.getDoneTaskList(function(doneTasks) {
+                            $("#failedTasks").append(renderTasks(failedTasks));
+                            $("#upstreamFailedTasks").append(renderTasks(upstreamFailedTasks));
+                            $("#runningTasks").append(renderTasks(runningTasks));
+                            $("#doneTasks").append(renderTasks(doneTasks));
+                            bindListEvents();
+                        });
                     });
                 });
             });
