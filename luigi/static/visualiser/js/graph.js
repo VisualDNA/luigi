@@ -178,7 +178,7 @@ Graph = (function() {
             $(svgLink(node.trackingUrl))
                 .append(
                     $(svgElement("text"))
-                    .text(node.taskId)
+                    .text(node.name)
                     .attr("y", 3))
                 .attr("class","graph-node-a")
                 .attr("data-task-status", node.status)
