@@ -40,15 +40,15 @@ UPSTREAM_FAILED = 'UPSTREAM_FAILED'
 UPSTREAM_SEVERITY_ORDER = ('', UPSTREAM_RUNNING, UPSTREAM_MISSING_INPUT, UPSTREAM_FAILED)
 
 class Task(object):
-    def __init__(self, status, deps):
+    def __init__(self, status, deps): 
         self.stakeholders = set()  # workers that are somehow related to this task (i.e. don't prune while any of these workers are still active)
         self.workers = set()  # workers that can perform task - task is 'BROKEN' if none of these workers are active
         if deps is None:
             self.deps = set()
         else:
             self.deps = set(deps)
-        self.status = status  # PENDING, RUNNING, FAILED or DONE
         self.time = time.time()  # Timestamp when task was first added
+        self.update(status)
         self.retry = None
         self.remove = None
         self.worker_running = None  # the worker that is currently running the task or None
@@ -57,6 +57,9 @@ class Task(object):
     def __repr__(self):
         return "Task(%r)" % vars(self)
 
+    def update(self, status):
+        self.status = status  # PENDING, RUNNING, FAILED or DONE
+        self.updated_time = time.time()
 
 class CentralPlannerScheduler(Scheduler):
     ''' Async scheduler that can handle multiple workers etc
@@ -120,7 +123,7 @@ class CentralPlannerScheduler(Scheduler):
                 # If a running worker disconnects, tag all its jobs as FAILED and subject it to the same retry logic
                 print 'task', task_id, 'is marked as running by inactive worker', task.worker_running, '(only', remaining_workers, 'remain) -> marking as FAILED'
                 task.worker_running = None
-                task.status = FAILED
+                task.update(FAILED)
                 task.retry = time.time() + self._retry_delay
 
         # Remove tasks that have no stakeholders
@@ -136,7 +139,7 @@ class CentralPlannerScheduler(Scheduler):
         # Reset FAILED tasks to PENDING if max timeout is reached, and retry delay is >= 0
         for task in self._tasks.values():
             if task.status == FAILED and self._retry_delay >= 0 and task.retry < time.time():
-                task.status = PENDING
+                task.update(PENDING)
 
     def update(self, worker):
         # update timestamp so that we keep track
@@ -159,7 +162,7 @@ class CentralPlannerScheduler(Scheduler):
 
         if not (task.status == RUNNING and status == PENDING):
             # don't allow re-scheduling of task while it is running, it must either fail or succeed first
-            task.status = status
+            task.update(status)
             if status == FAILED:
                 task.retry = time.time() + self._retry_delay
 
@@ -249,8 +252,7 @@ class CentralPlannerScheduler(Scheduler):
     def _serialize_task(self, task_id, upstream_status_table):
         task = self._tasks[task_id]
         upstream_status = self._upstream_status(task, upstream_status_table)
-        print task_id
-        return {
+        serialized = {
             'deps': list(task.deps),
             'status': task.status,
             'upstream_status': upstream_status,
@@ -259,6 +261,11 @@ class CentralPlannerScheduler(Scheduler):
             'params': self._get_task_params(task_id),
             'name' : self._get_task_name(task_id)
         }
+        # Cleanly handle pickled tasks that do not yet have an updated time attribute
+        # by not including the field.
+        if hasattr(task, 'updated_time'):
+            serialized['updated_time'] = task.updated_time
+        return serialized
 
     def _get_task_params(self, task_id):
         params = {}

@@ -40,8 +40,32 @@ var LuigiAPI = (function() {
         });
     };
 
+    LuigiAPI.prototype.getTasksList = function(callback) {
+        jsonRPC(this.urlRoot + "/task_list", {status: "", upstream_status: ""}, function(response) {
+            callback(flatten(response.response));
+        });
+    };
+
     LuigiAPI.prototype.getUpstreamFailedTaskList = function(callback) {
         jsonRPC(this.urlRoot + "/task_list", {status: "PENDING", upstream_status: "UPSTREAM_FAILED"}, function(response) {
+            callback(flatten(response.response));
+        });
+    };
+
+    LuigiAPI.prototype.getDoneTaskList = function(callback) {
+        jsonRPC(this.urlRoot + "/task_list", {status: "DONE", upstream_status: ""}, function(response) {
+            callback(flatten(response.response));
+        });
+    };
+
+    LuigiAPI.prototype.getRunningTaskList = function(callback) {
+        jsonRPC(this.urlRoot + "/task_list", {status: "RUNNING", upstream_status: ""}, function(response) {
+            callback(flatten(response.response));
+        });
+    };
+
+    LuigiAPI.prototype.getPendingTaskList = function(callback) {
+        jsonRPC(this.urlRoot + "/task_list", {status: "PENDING", upstream_status: "UPSTREAM_RUNNING"}, function(response) {
             callback(flatten(response.response));
         });
     };

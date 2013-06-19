@@ -3,6 +3,8 @@
     <head>
         <title>Luigi Task Visualiser</title>
         <script src="lib/jquery-1.10.0.min.js"></script>
+        <script src="lib/jquery-ui-1.10.3.autocomplete_widget.min.js"></script>
+   		<link rel="stylesheet" href="css/jquery-ui-1.10.3.custom.min.css" />
         <link href="lib/bootstrap/css/bootstrap.min.css" rel="stylesheet">
         <link href="lib/jquery-ui/css/jquery-ui-1.10.3.custom.min.css" rel="stylesheet">
         <script src="lib/bootstrap/js/bootstrap.min.js"></script>
@@ -42,6 +44,11 @@
         .link {
           stroke: #999;
           stroke-opacity: .6;
+        }
+
+        .error {
+          color: red;
+          font-weight: bold
         }
 
         svg {
@@ -88,6 +95,22 @@
                 <button class="btn" data-dismiss="modal" aria-hidden="true">Close</button>
             </div>
         </script>
+	  <script>
+		  $(function() {
+			 luigi =  new LuigiAPI("../../api")
+		
+			 luigi.getTasksList(function(availableTasks){
+				 var tasks = [];
+				 $.each(availableTasks, function(value) {
+					 tasks.push(this.taskId);
+				 });
+				$( ".search-query" ).autocomplete({
+			        source: tasks
+			     });
+			 });
+		
+		  });
+	  </script>
     </head>
     <body>
         <div class="page-header custom-header">
@@ -104,6 +127,12 @@
                 <div id="upstreamFailedTasks" class="taskList"></div>
                 <h3>Failed Tasks</h3>
                 <div id="failedTasks" class="taskList"></div>
+                <h3>Running Tasks</h3>
+                <div id="runningTasks" class="taskList"></div>
+                <h3>Pending Tasks</h3>
+                <div id="pendingTasks" class="taskList"></div>
+                <h3>Done Tasks</h3>
+                <div id="doneTasks" class="taskList"></div>
             </section>
             <section id="dependencyGraph" class="tab-pane">
                 <div class="navbar">
@@ -113,6 +142,8 @@
                       <button type="submit" class="btn">Show task details</button>
                     </form>
                   </div>
+                </div>
+                <div id="searchError" class="container-fluid error">
                 </div>
                 <div id="graphContainer" class="container-fluid">
                     <h4 id="dependencyTitle"></h4>
