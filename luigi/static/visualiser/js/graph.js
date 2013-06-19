@@ -174,6 +174,9 @@ Graph = (function() {
         bounds = findBounds(this.graph.nodes);
         this.renderGraph();
         this.svg.attr("height", bounds.y+10);
+        this.svg.attr("width", graphWidth+10);
+        this.svg[0].setAttributeNS("http://www.w3.org/2000/svg", "preserveAspectRatio", "xMidYMid meet");
+        this.svg[0].setAttributeNS("http://www.w3.org/2000/svg", "viewBox", "0 0 " + graphWidth + " " + (bounds.y+10));
     };
 
     return {
