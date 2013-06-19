@@ -1,9 +1,9 @@
 Graph = (function() {
     var statusColors = {
         "FAILED":"#DD0000",
-        "DONE":"#00DD00",
+        "RUNNING":"#0044DD",
         "PENDING":"#EEBB00",
-        "RUNNING":"#0044DD"
+        "DONE":"#00DD00"
     };
 
     function nodeFromTask(task) {
@@ -166,6 +166,40 @@ Graph = (function() {
                 .attr("data-task-status", node.status)
                 .attr("data-task-id", node.taskId)
                 .appendTo(g);
+        });
+
+        // Legend for Task status
+        var legend = $(svgElement("g"))
+                .addClass("legend")
+                .appendTo(self.svg)
+
+        lh = 20     // line height
+        $(svgElement("rect"))
+            .attr("x", -1)
+            .attr("y", -1)
+            .attr("width", "100px")
+            .attr("height", Object.keys(statusColors).length*lh+(lh/2) + "px")
+            .attr("fill", "#FFF")
+            .attr("stroke", "#DDD")
+            .appendTo(legend);
+
+        var x = 0;
+        $.each(statusColors, function(i, color) {
+            var c = $(svgElement("circle"))
+                .addClass("nodeCircle")
+                .attr("r", 7)
+                .attr("cx", lh)
+                .attr("cy", (lh-4)+(x*lh))
+                .attr("fill", color)
+                .appendTo(legend)
+
+            $(svgElement("text"))
+                .text(i.charAt(0).toUpperCase() + i.substring(1).toLowerCase())
+                .attr("x", lh + 14)
+                .attr("y", lh+(x*lh))
+                .appendTo(legend);
+
+            x++;
         });
     };
 
