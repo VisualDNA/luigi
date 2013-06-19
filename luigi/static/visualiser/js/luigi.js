@@ -39,10 +39,11 @@ var LuigiAPI = (function() {
             callback(flatten(response.response));
         });
     };
+
     LuigiAPI.prototype.getTasksList = function(callback) {
-    	jsonRPC(this.urlRoot + "/task_list", {status: "", upstream_status: ""}, function(response) {
-    		callback(flatten(response.response));
-    	});
+        jsonRPC(this.urlRoot + "/task_list", {status: "", upstream_status: ""}, function(response) {
+            callback(flatten(response.response));
+        });
     };
 
     LuigiAPI.prototype.getUpstreamFailedTaskList = function(callback) {
@@ -53,6 +54,12 @@ var LuigiAPI = (function() {
 
     LuigiAPI.prototype.getDoneTaskList = function(callback) {
         jsonRPC(this.urlRoot + "/task_list", {status: "DONE", upstream_status: ""}, function(response) {
+            callback(flatten(response.response));
+        });
+    };
+
+    LuigiAPI.prototype.getRunningTaskList = function(callback) {
+        jsonRPC(this.urlRoot + "/task_list", {status: "RUNNING", upstream_status: ""}, function(response) {
             callback(flatten(response.response));
         });
     };
