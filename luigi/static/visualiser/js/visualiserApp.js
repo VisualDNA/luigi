@@ -151,6 +151,7 @@ function visualiserApp(luigi) {
                             $("#upstreamFailedTasks").append(renderTasks(upstreamFailedTasks));
                             $("#runningTasks").append(renderTasks(runningTasks));
                             $("#doneTasks").append(renderTasks(doneTasks));
+                            $("#pendingTasks").append(renderTasks(pendingTasks));
                             bindListEvents();
                         });
                     });
