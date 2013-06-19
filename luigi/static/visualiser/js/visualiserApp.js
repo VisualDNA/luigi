@@ -22,12 +22,20 @@ function visualiserApp(luigi) {
         var taskIdParts = /([A-Za-z]*)\((.*)\)/.exec(task.taskId);
         var taskName = taskIdParts[1];
         var taskParams = taskIdParts[2];
-        var displayTime = new Date(Math.floor(task.start_time*1000)).toLocaleTimeString();
+        var startTimeDate = new Date(Math.floor(task.start_time*1000))
+        var statusChangeTimeDate = new Date(Math.floor(task.updated_time*1000))
+        
+        var displayTime = startTimeDate.toLocaleDateString() + " " 
+        	+ startTimeDate.toLocaleTimeString();
+        var statusChangeTime = statusChangeTimeDate.toLocaleDateString() + " " 
+        	+ statusChangeTimeDate.toLocaleTimeString();
+        	
         return {
             taskId: task.taskId,
             taskName: taskName,
             taskParams: taskParams,
             displayTime: displayTime,
+            statusChangeTime: statusChangeTime,
             trackingUrl: task.trackingUrl,
             status: task.status,
             graph: task.status == "PENDING"
