@@ -61,6 +61,7 @@
                 </h4>
                 <div class="taskRows" style="display:none">
                     {{#value}}
+                    {{#page0}}
                     <div class="taskRow row-fluid" data-task-id="{{taskId}}">
                         <div class="span4"><strong>{{taskName}}</strong><em> ({{taskParams}})</em></div>
                         <div class="span2">{{verdict}}</div>
@@ -70,6 +71,7 @@
                             {{^graph}}<a class="btn btn-primary btn-small error-trace-button" data-task-id="{{taskId}}">Show Error Trace</a>{{/graph}}
                         </div>
                     </div>
+                    {{/page0}}
                     {{/value}}
                 </div>
             </div>
@@ -111,6 +113,8 @@
                       <button type="submit" class="btn">Show task details</button>
                     </form>
                   </div>
+                </div>
+                <div id="searchError" class="container-fluid error">
                 </div>
                 <div id="graphContainer" class="container-fluid">
                     <h4 id="dependencyTitle"></h4>
