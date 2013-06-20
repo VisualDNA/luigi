@@ -39,7 +39,8 @@ function visualiserApp(luigi) {
             statusChangeTime: statusChangeTime,
             trackingUrl: task.trackingUrl,
             status: task.status,
-            graph: (task.status == "PENDING" || task.status == "DONE" || task.status == "RUNNING")
+            graph: task.status == "PENDING",
+            error: task.status == "FAILED"
         };
     }
 
