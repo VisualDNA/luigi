@@ -49,8 +49,8 @@ class Parameter(object):
         self.is_list = is_list
         self.is_boolean = is_boolean and not is_list  # Only BooleanParameter should ever use this. TODO(erikbern): should we raise some kind of exception?
         self.is_global = is_global  # It just means that the default value is exposed and you can override it
-        self.significant = significant
-        if is_global and default == _no_default:
+        self.significant = significant # Whether different values for this parameter will differentiate otherwise equal tasks
+        if is_global and default == _no_default and default_from_config is None:
             raise ParameterException('Global parameters need default values')
         self.description = description
 
@@ -63,9 +63,26 @@ class Parameter(object):
         self.counter = Parameter.counter  # We need to keep track of this to get the order right (see Task class)
         Parameter.counter += 1
 
+    def _get_default_from_config(self, safe):
+        """Loads the default from the config. If safe=True, then returns None if missing. Otherwise,
+           raises an UnknownConfigException."""
+
+        conf = configuration.get_config()
+        (section, name) = (self.default_from_config['section'], self.default_from_config['name'])
+        try:
+            return conf.get(section, name)
+        except (NoSectionError, NoOptionError), e:
+            if safe:
+                return None
+            raise UnknownConfigException("Couldn't find value for section={0} name={1}. Search config files: '{2}'".format(
+                section, name, ", ".join(conf._config_paths)), e)
+
     @property
     def has_default(self):
-        return self.__default != _no_default or self.default_from_config is not None
+        """True if a default was specified or if default_from_config references a valid entry in the conf."""
+        if self.default_from_config is not None:
+            return self._get_default_from_config(safe=True) is not None
+        return self.__default != _no_default
 
     @property
     def default(self):
@@ -74,20 +91,20 @@ class Parameter(object):
         if self.__default != _no_default:
             return self.__default
 
-        conf = configuration.get_config()
-        (section, name) = (self.default_from_config['section'], self.default_from_config['name'])
-        try:
-            return self.parse(conf.get(section, name))
-        except (NoSectionError, NoOptionError), e:
-            raise UnknownConfigException("Couldn't find value for section={0} name={1}. Search config files: '{2}'".format(
-                section, name, ", ".join(conf._config_paths)), e)
-
+        value = self._get_default_from_config(safe=False)
+        if self.is_list:
+            return tuple(self.parse(p.strip()) for p in value.strip().split('\n'))
+        else:
+            return self.parse(value)
 
     def set_default(self, value):
         self.__default = value
 
     def parse(self, x):
         return x  # default impl
+
+    def serialize(self, x): # opposite of parse
+        return str(x)
 
     def parse_from_input(self, param_name, x):
         if not x:
@@ -112,6 +129,9 @@ class DateHourParameter(Parameter):
         # time intervals (similar to date_interval). Or what do you think?
         return datetime.datetime.strptime(s, "%Y-%m-%dT%H")  # ISO 8601 is to use 'T'
 
+    def serialize(self, dt):
+        return dt.strftime('%Y-%m-%dT%H')
+
 
 class DateParameter(Parameter):
     def parse(self, s):
@@ -122,6 +142,9 @@ class IntParameter(Parameter):
     def parse(self, s):
         return int(s)
 
+class FloatParameter(Parameter):
+    def parse(self, s):
+        return float(s)
 
 class BooleanParameter(Parameter):
     # TODO(erikbern): why do we call this "boolean" instead of "bool"?
@@ -149,3 +172,52 @@ class DateIntervalParameter(Parameter):
                 return i
         else:
             raise ValueError('Invalid date interval - could not be parsed')
+
+
+class TimeDeltaParameter(Parameter):
+    """Class that maps to timedelta using strings in any of the following forms:
+     - (n {w[eek[s]]|d[ay[s]]|h[our[s]]|m[inute[s]|s[second[s]]}) (e.g. "1 week 2 days" or "1 h")
+        Note: multiple arguments must be supplied in longest to shortest unit order
+     - ISO 8601 duration PnDTnHnMnS (each field optional, years and months not supported)
+     - ISO 8601 duration PnW
+    See https://en.wikipedia.org/wiki/ISO_8601#Durations
+    """
+
+    def apply_regex(self, regex, input):
+        from datetime import timedelta
+        import re
+        re_match = re.match(regex, input)
+        if re_match:
+            kwargs = {}
+            has_val = False
+            for k,v in re_match.groupdict(default="0").items():
+                val = int(v)
+                has_val = has_val or val != 0
+                kwargs[k] = val
+            if has_val:
+                return timedelta(**kwargs)
+
+    def parseIso8601(self, input):
+        def field(key):
+            return "(?P<%s>\d+)%s" % (key, key[0].upper())
+        def optional_field(key):
+            return "(%s)?" % field(key)
+        # A little loose: ISO 8601 does not allow weeks in combination with other fields, but this regex does (as does python timedelta)
+        regex = "P(%s|%s(T%s)?)" % (field("weeks"), optional_field("days"), "".join([optional_field(key) for key in ["hours", "minutes", "seconds"]]))
+        return self.apply_regex(regex,input)
+
+    def parseSimple(self, input):
+        keys = ["weeks", "days", "hours", "minutes", "seconds"]
+        # Give the digits a regex group name from the keys, then look for text with the first letter of the key,
+        # optionally followed by the rest of the word, with final char (the "s") optional
+        regex = "".join(["((?P<%s>\d+) ?%s(%s)?(%s)? ?)?" % (k, k[0], k[1:-1], k[-1]) for k in keys])
+        return self.apply_regex(regex, input)
+
+    def parse(self, input):
+        result = self.parseIso8601(input)
+        if not result:
+            result = self.parseSimple(input)
+        if result:
+            return result
+        else:
+            raise ParameterException("Invalid time delta - could not parse %s" % input)

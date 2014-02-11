@@ -26,12 +26,14 @@ import logging
 import StringIO
 import re
 import shutil
+import signal
 from hashlib import md5
 import luigi
 import luigi.hdfs
 import configuration
 import warnings
 import mrrunner
+import json
 
 logger = logging.getLogger('luigi-interface')
 
@@ -93,7 +95,7 @@ def create_packages_archive(packages, filename):
         if hasattr(package, "__path__"):
             p = package.__path__[0]
 
-            if p.find('.egg') != -1:
+            if p.endswith('.egg') and os.path.isfile(p):
                 raise 'egg files not supported!!!'
                 # Add the entire egg file
                 # p = p[:p.find('.egg') + 4]
@@ -142,6 +144,29 @@ def flatten(sequence):
             yield item
 
 
+class HadoopRunContext(object):
+    def __init__(self):
+        self.job_id = None
+
+    def __enter__(self):
+        self.__old_signal = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, self.kill_job)
+        return self
+
+    def kill_job(self, captured_signal=None, stack_frame=None):
+        if self.job_id:
+            logger.info('Job interrupted, killing job %s', self.job_id)
+            subprocess.call(['mapred', 'job', '-kill', self.job_id])
+        if captured_signal is not None:
+            # adding 128 gives the exit code corresponding to a signal
+            sys.exit(128 + captured_signal)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is KeyboardInterrupt:
+            self.kill_job()
+        signal.signal(signal.SIGTERM, self.__old_signal)
+
+
 class HadoopJobError(RuntimeError):
     def __init__(self, message, out=None, err=None):
         super(HadoopJobError, self).__init__(message, out, err)
@@ -150,45 +175,57 @@ class HadoopJobError(RuntimeError):
         self.err = err
 
 
-def run_and_track_hadoop_job(arglist, tracking_url_callback=None):
+def run_and_track_hadoop_job(arglist, tracking_url_callback=None, env=None):
     ''' Runs the job by invoking the command from the given arglist. Finds tracking urls from the output and attempts to fetch
     errors using those urls if the job fails. Throws HadoopJobError with information about the error (including stdout and stderr
     from the process) on failure and returns normally otherwise.
     '''
-    logger.info(' '.join(arglist))
+    logger.info('%s', ' '.join(arglist))
 
-    def track_process(arglist, tracking_url_callback):
+    def write_luigi_history(arglist, history):
+        '''
+        Writes history to a file in the job's output directory in JSON format.
+        Currently just for tracking the job ID in a configuration where no history is stored in the output directory by Hadoop.
+        '''
+        history_filename = configuration.get_config().get('core', 'history-filename', '')
+        if history_filename and '-output' in arglist:
+            output_dir = arglist[arglist.index('-output') + 1]
+            f = luigi.hdfs.HdfsTarget(os.path.join(output_dir, history_filename)).open('w')
+            f.write(json.dumps(history))
+            f.close()
+
+    def track_process(arglist, tracking_url_callback, env=None):
         # Dump stdout to a temp file, poll stderr and log it
         temp_stdout = tempfile.TemporaryFile()
-        proc = subprocess.Popen(arglist, stdout=temp_stdout, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(arglist, stdout=temp_stdout, stderr=subprocess.PIPE, env=env, close_fds=True)
 
         # We parse the output to try to find the tracking URL.
         # This URL is useful for fetching the logs of the job.
         tracking_url = None
         job_id = None
         err_lines = []
-        while True:
-            try:
-                if proc.poll() is not None:
-                    break
+
+        with HadoopRunContext() as hadoop_context:
+            while proc.poll() is None:
                 err_line = proc.stderr.readline()
-            except KeyboardInterrupt:
-                if job_id:
-                    logger.info('Job interrupted by user, killing job %s', job_id)
-                    kill_job(job_id)
-                raise
-            err_lines.append(err_line)
-            if err_line.strip():
-                logger.info(err_line.strip())
-            if err_line.find('Tracking URL') != -1:
-                tracking_url = err_line.strip().split('Tracking URL: ')[-1]
-                try:
-                    tracking_url_callback(tracking_url)
-                except Exception as e:
-                    logger.error("Error in tracking_url_callback, disabling! %s" % e)
-                    tracking_url_callback = lambda x: None
-            if err_line.find('Running job') != -1:
-                job_id = err_line.strip().split('Running job: ')[-1]
+                err_lines.append(err_line)
+                err_line = err_line.strip()
+                if err_line:
+                    logger.info('%s', err_line)
+                if err_line.find('Tracking URL') != -1:
+                    tracking_url = err_line.split('Tracking URL: ')[-1]
+                    try:
+                        tracking_url_callback(tracking_url)
+                    except Exception as e:
+                        logger.error("Error in tracking_url_callback, disabling! %s", e)
+                        tracking_url_callback = lambda x: None
+                if err_line.find('Running job') != -1:
+                    # hadoop jar output
+                    job_id = err_line.split('Running job: ')[-1]
+                if err_line.find('submitted hadoop job:') != -1:
+                    # scalding output
+                    job_id = err_line.split('submitted hadoop job: ')[-1]
+                hadoop_context.job_id = job_id
 
         # Read the rest + stdout
         err = ''.join(err_lines + [err_line for err_line in proc.stderr])
@@ -196,6 +233,7 @@ def run_and_track_hadoop_job(arglist, tracking_url_callback=None):
         out = ''.join(temp_stdout.readlines())
 
         if proc.returncode == 0:
+            write_luigi_history(arglist, {'job_id': job_id})
             return
 
         # Try to fetch error logs if possible
@@ -217,11 +255,7 @@ def run_and_track_hadoop_job(arglist, tracking_url_callback=None):
     if tracking_url_callback is None:
         tracking_url_callback = lambda x: None
 
-    track_process(arglist, tracking_url_callback)
-
-
-def kill_job(job_id):
-    subprocess.call(['mapred', 'job', '-kill', job_id])
+    track_process(arglist, tracking_url_callback, env)
 
 
 def fetch_task_failures(tracking_url):
@@ -236,7 +270,7 @@ def fetch_task_failures(tracking_url):
     import mechanize
     timeout = 3.0
     failures_url = tracking_url.replace('jobdetails.jsp', 'jobfailures.jsp') + '&cause=failed'
-    logger.debug('Fetching data from %s' % failures_url)
+    logger.debug('Fetching data from %s', failures_url)
     b = mechanize.Browser()
     b.open(failures_url, timeout=timeout)
     links = list(b.links(text_regex='Last 4KB'))  # For some reason text_regex='All' doesn't work... no idea why
@@ -250,7 +284,7 @@ def fetch_task_failures(tracking_url):
             r = b2.open(task_url, timeout=timeout)
             data = r.read()
         except Exception, e:
-            logger.debug('Error fetching data from %s: %s' % (task_url, e))
+            logger.debug('Error fetching data from %s: %s', task_url, e)
             continue
         # Try to get the hex-encoded traceback back from the output
         for exc in re.findall(r'luigi-exc-hex=[0-9a-f]+', data):
@@ -292,28 +326,39 @@ class HadoopJobRunner(JobRunner):
         if runner_path.endswith("pyc"):
             runner_path = runner_path[:-3] + "py"
 
-        base_tmp_dir = configuration.get_config().get('core', 'tmp-dir', '/tmp/luigi')
-        self.tmp_dir = os.path.join(base_tmp_dir, 'hadoop_job_%016x' % random.getrandbits(64))
+        base_tmp_dir = configuration.get_config().get('core', 'tmp-dir', None)
+        if base_tmp_dir:
+            warnings.warn("The core.tmp-dir configuration item is"\
+                          " deprecated, please use the TMPDIR"\
+                          " environment variable if you wish"\
+                          " to control where luigi.hadoop may"\
+                          " create temporary files and directories.")
+            self.tmp_dir = os.path.join(base_tmp_dir, 'hadoop_job_%016x' % random.getrandbits(64))
+            os.makedirs(self.tmp_dir)
+        else:
+            self.tmp_dir = tempfile.mkdtemp()
+
         logger.debug("Tmp dir: %s", self.tmp_dir)
-        os.makedirs(self.tmp_dir)
 
         # build arguments
-        map_cmd = 'python mrrunner.py map'
-        cmb_cmd = 'python mrrunner.py combiner'
-        red_cmd = 'python mrrunner.py reduce'
+        config = configuration.get_config()
+        python_executable = config.get('hadoop', 'python-executable', 'python')
+        map_cmd = '{0} mrrunner.py map'.format(python_executable)
+        cmb_cmd = '{0} mrrunner.py combiner'.format(python_executable)
+        red_cmd = '{0} mrrunner.py reduce'.format(python_executable)
 
         # replace output with a temporary work directory
         output_final = job.output().path
         output_tmp_fn = output_final + '-temp-' + datetime.datetime.now().isoformat().replace(':', '-')
         tmp_target = luigi.hdfs.HdfsTarget(output_tmp_fn, is_tmp=True)
 
-        arglist = ['hadoop', 'jar', self.streaming_jar]
+        arglist = [luigi.hdfs.load_hadoop_cmd(), 'jar', self.streaming_jar]
 
         # 'libjars' is a generic option, so place it first
         libjars = [libjar for libjar in self.libjars]
 
         for libjar in self.libjars_in_hdfs:
-            subprocess.call(['hadoop', 'fs', '-get', libjar, self.tmp_dir])
+            subprocess.call([luigi.hdfs.load_hadoop_cmd(), 'fs', '-get', libjar, self.tmp_dir])
             libjars.append(os.path.join(self.tmp_dir, os.path.basename(libjar)))
 
         if libjars:
@@ -342,9 +387,11 @@ class HadoopJobRunner(JobRunner):
 
         arglist += self.streaming_args
 
-        arglist += ['-mapper', map_cmd, '-reducer', red_cmd]
+        arglist += ['-mapper', map_cmd]
         if job.combiner != NotImplemented:
             arglist += ['-combiner', cmb_cmd]
+        if job.reducer != NotImplemented:
+            arglist += ['-reducer', red_cmd]
         files = [runner_path, self.tmp_dir + '/packages.tar', self.tmp_dir + '/job-instance.pickle']
 
         for f in files:
@@ -374,8 +421,9 @@ class HadoopJobRunner(JobRunner):
         self.finish()
 
     def finish(self):
+        # FIXME: check for isdir?
         if self.tmp_dir and os.path.exists(self.tmp_dir):
-            logger.debug('Removing directory %s' % self.tmp_dir)
+            logger.debug('Removing directory %s', self.tmp_dir)
             shutil.rmtree(self.tmp_dir)
 
     def __del__(self):
@@ -427,6 +475,13 @@ class LocalJobRunner(JobRunner):
 
         map_input.seek(0)
 
+        if job.reducer == NotImplemented:
+            # Map only job; no combiner, no reducer
+            map_output = job.output().open('w')
+            job._run_mapper(map_input, map_output)
+            map_output.close()
+            return
+
         # run job now...
         map_output = StringIO.StringIO()
         job._run_mapper(map_input, map_output)
@@ -456,16 +511,26 @@ class BaseHadoopJobTask(luigi.Task):
     final_combiner = NotImplemented
     final_reducer = NotImplemented
 
+    reducer = NotImplemented
+
     _counter_dict = {}
     task_id = None
 
     def jobconfs(self):
         jcs = []
         jcs.append('mapred.job.name=%s' % self.task_id)
-        jcs.append('mapred.reduce.tasks=%s' % self.n_reduce_tasks)
+        if self.reducer == NotImplemented:
+            jcs.append('mapred.reduce.tasks=0')
+        else:
+            jcs.append('mapred.reduce.tasks=%s' % self.n_reduce_tasks)
         pool = self.pool
         if pool is not None:
-            jcs.append('mapred.fairscheduler.pool=%s' % pool)
+            # Supporting two schedulers: fair (default) and capacity using the same option
+            scheduler_type = configuration.get_config().get('hadoop', 'scheduler', 'fair')
+            if scheduler_type == 'fair':
+                jcs.append('mapred.fairscheduler.pool=%s' % pool)
+            elif scheduler_type == 'capacity':
+                jcs.append('mapred.job.queue.name=%s' % pool)
         return jcs
 
 
@@ -571,10 +636,6 @@ class JobTask(BaseHadoopJobTask):
         yield None, item
 
     combiner = NotImplemented
-
-    def reducer(self, key, values):
-        for v in values:
-            yield key, v
 
     def incr_counter(self, *args, **kwargs):
         """ Increments a Hadoop counter
@@ -689,7 +750,10 @@ class JobTask(BaseHadoopJobTask):
         self.init_hadoop()
         self.init_mapper()
         outputs = self._map_input((line[:-1] for line in stdin))
-        self.internal_writer(outputs, stdout)
+        if self.reducer == NotImplemented:
+            self.writer(outputs, stdout)
+        else:
+            self.internal_writer(outputs, stdout)
 
     def _run_reducer(self, stdin=sys.stdin, stdout=sys.stdout):
         """Run the reducer on the hadoop node."""

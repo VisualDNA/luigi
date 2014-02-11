@@ -13,11 +13,13 @@
 # the License.
 
 import abc
+import logging
 import parameter
 import warnings
 import traceback
 
 Parameter = parameter.Parameter
+logger = logging.getLogger('luigi-interface')
 
 
 def namespace(namespace=None):
@@ -25,6 +27,25 @@ def namespace(namespace=None):
 
     If called without arguments or with None as the namespace, the namespace is reset, which is recommended to do at the end of any file where the namespace is set to avoid unintentionally setting namespace on tasks outside of the scope of the current file."""
     Register._default_namespace = namespace
+
+
+def id_to_name_and_params(task_id):
+    ''' Turn a task_id into a (task_family, {params}) tuple.
+        E.g. calling with 'Foo(bar=bar, baz=baz)' returns ('Foo', {'bar': 'bar', 'baz': 'baz'})
+    '''
+    lparen = task_id.index('(')
+    task_family = task_id[:lparen]
+    params = task_id[lparen + 1:-1]
+
+    def split_equals(x):
+        equals = x.index('=')
+        return x[:equals], x[equals + 1:]
+    if params:
+        param_list = map(split_equals, params.split(', '))  # TODO: param values with ', ' in them will break this
+    else:
+        param_list = []
+    return task_family, dict(param_list)
+
 
 
 class Register(abc.ABCMeta):
@@ -69,6 +90,7 @@ class Register(abc.ABCMeta):
         try:
             hash(k)
         except TypeError:
+            logger.debug("Not all parameter values are hashable so instance isn't coming from the cache")
             return instantiate()  # unhashable types in parameters
 
         if k not in h:
@@ -116,6 +138,7 @@ class Register(abc.ABCMeta):
         return global_params.iteritems()
 
 
+
 class Task(object):
     __metaclass__ = Register
 
@@ -127,6 +150,31 @@ class Task(object):
 
     `Task._parameters` - list of (parameter_name, parameter) tuples for this task class
     """
+    _event_callbacks = {}
+
+    @classmethod
+    def event_handler(cls, event):
+        """ Decorator for adding event handlers """
+        def wrapped(callback):
+            cls._event_callbacks.setdefault(cls, {}).setdefault(event, set()).add(callback)
+            return callback
+        return wrapped
+
+    def trigger_event(self, event, *args, **kwargs):
+        """ Trigger that calls all of the specified events associated with this class.
+        """
+        for event_class, event_callbacks in self._event_callbacks.iteritems():
+            if not isinstance(self, event_class):
+                continue
+            for callback in event_callbacks.get(event, []):
+                try:
+                    # callbacks are protected
+                    callback(*args, **kwargs)
+                except KeyboardInterrupt:
+                    return
+                except:
+                    logger.exception("Error in event callback for %r", event)
+                    pass
 
     @property
     def task_family(self):
@@ -192,8 +240,8 @@ class Task(object):
                 result[param_name] = param_obj.default
 
         def list_to_tuple(x):
-            """ Make tuples out of lists to allow hashing """
-            if isinstance(x, list):
+            """ Make tuples out of lists and sets to allow hashing """
+            if isinstance(x, list) or isinstance(x, set):
                 return tuple(x)
             else:
                 return x
@@ -208,10 +256,16 @@ class Task(object):
         for key, value in param_values:
             setattr(self, key, value)
 
+        # Register args and kwargs as an attribute on the class. Might be useful
+        self.param_args = tuple(value for key, value in param_values)
+        self.param_kwargs = dict(param_values)
+
+        # Build up task id
         task_id_parts = []
+        param_objs = dict(params)
         for param_name, param_value in param_values:
             if dict(params)[param_name].significant:
-                task_id_parts.append('%s=%s' % (str(param_name), str(param_value)))
+                task_id_parts.append('%s=%s' % (param_name, param_objs[param_name].serialize(param_value)))
 
         self.task_id = '%s(%s)' % (self.task_family, ', '.join(task_id_parts))
         self.__hash = hash(self.task_id)
@@ -221,7 +275,7 @@ class Task(object):
 
     @classmethod
     def from_input(cls, params, global_params):
-        # Creates an instance from a str->str hash (to be used for cmd line interaction etc)
+        ''' Creates an instance from a str->str hash (to be used for cmd line interaction etc) '''
         for param_name, param in global_params:
             value = param.parse_from_input(param_name, params[param_name])
             param.set_default(value)
@@ -232,6 +286,26 @@ class Task(object):
             kwargs[param_name] = value
 
         return cls(**kwargs)
+
+    def clone(self, cls=None, **kwargs):
+        ''' Creates a new instance from an existing instance where some of the args have changed.
+
+        There's at least two scenarios where this is useful (see test/clone_test.py)
+        - Remove a lot of boiler plate when you have recursive dependencies and lots of args
+        - There's task inheritance and some logic is on the base class
+        '''
+        k = self.param_kwargs.copy()
+        k.update(kwargs.items())
+
+        if cls is None:
+            cls = self.__class__
+        
+        new_k = {}
+        for param_name, param_class in cls.get_nonglobal_params():
+            if param_name in k:
+                new_k[param_name] = k[param_name]
+
+        return cls(**new_k)
 
     def __hash__(self):
         return self.__hash
@@ -262,12 +336,24 @@ class Task(object):
     def requires(self):
         return []  # default impl
 
+    def _requires(self):
+        '''
+        Override in "template" tasks which themselves are supposed to be
+        subclassed and thus have their requires() overridden (name preserved to
+        provide consistent end-user experience), yet need to introduce
+        (non-input) dependencies.
+
+        Must return an iterable which among others contains the _requires() of
+        the superclass.
+        '''
+        return flatten(self.requires())  # base impl
+
     def input(self):
         return getpaths(self.requires())
 
     def deps(self):
         # used by scheduler
-        return flatten(self.requires())
+        return flatten(self._requires())
 
     def run(self):
         pass  # default impl
@@ -290,7 +376,6 @@ class Task(object):
         This method gets called when :py:meth:`run` completes without raising any exceptions.
         The returned value is json encoded and sent to the scheduler as the `expl` argument.
         Default behavior is to send an None value"""
-        return None
 
 
 def externalize(task):

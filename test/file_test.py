@@ -17,6 +17,7 @@ from luigi.file import LocalFileSystem
 import unittest
 import os
 import gzip
+import bz2
 import luigi.format
 import random
 import gc
@@ -25,14 +26,19 @@ import shutil
 
 class FileTest(unittest.TestCase):
     path = '/tmp/test.txt'
+    copy = '/tmp/test.copy.txt'
 
     def setUp(self):
         if os.path.exists(self.path):
             os.remove(self.path)
+        if os.path.exists(self.copy):
+            os.remove(self.copy)
 
     def tearDown(self):
         if os.path.exists(self.path):
             os.remove(self.path)
+        if os.path.exists(self.copy):
+            os.remove(self.copy)
 
     def test_close(self):
         t = File(self.path)
@@ -90,6 +96,57 @@ class FileTest(unittest.TestCase):
         f = File(self.path, luigi.format.Gzip).open('r')
         self.assertTrue(test_data == f.read())
         f.close()
+
+    def test_bzip2(self):
+        t = File(self.path, luigi.format.Bzip2)
+        p = t.open('w')
+        test_data = 'test'
+        p.write(test_data)
+        print self.path
+        self.assertFalse(os.path.exists(self.path))
+        p.close()
+        self.assertTrue(os.path.exists(self.path))
+
+        # Using bzip module as validation
+        f = bz2.BZ2File(self.path, 'rb')
+        self.assertTrue(test_data == f.read())
+        f.close()
+
+        # Verifying our own bzip2 reader
+        f = File(self.path, luigi.format.Bzip2).open('r')
+        self.assertTrue(test_data == f.read())
+        f.close()
+
+
+    def test_copy(self):
+        t = File(self.path)
+        f = t.open('w')
+        test_data = 'test'
+        f.write(test_data)
+        f.close()
+        self.assertTrue(os.path.exists(self.path))
+        self.assertFalse(os.path.exists(self.copy))
+        t.copy(self.copy)
+        self.assertTrue(os.path.exists(self.path))
+        self.assertTrue(os.path.exists(self.copy))
+        self.assertEqual(t.open('r').read(), File(self.copy).open('r').read())
+
+    def test_format_injection(self):
+        class CustomFormat(luigi.format.Format):
+            def pipe_reader(self, input_pipe):
+                input_pipe.foo = "custom read property"
+                return input_pipe
+
+            def pipe_writer(self, output_pipe):
+                output_pipe.foo = "custom write property"
+                return output_pipe
+
+        t = File(self.path, format=CustomFormat())
+        with t.open("w") as f:
+            self.assertEqual(f.foo, "custom write property")
+
+        with t.open("r") as f:
+            self.assertEqual(f.foo, "custom read property")
 
 
 class FileCreateDirectoriesTest(FileTest):

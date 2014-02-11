@@ -17,6 +17,7 @@ import random
 import tempfile
 import shutil
 from target import FileSystem, FileSystemTarget
+from luigi.format import FileWrapper
 
 
 class atomic_file(file):
@@ -58,7 +59,7 @@ class LocalFileSystem(FileSystem):
         os.makedirs(path)
 
     def isdir(self, path):
-        os.path.isdir(path)
+        return os.path.isdir(path)
 
     def remove(self, path, recursive=True):
         if recursive and self.isdir(path):
@@ -93,10 +94,10 @@ class File(FileSystemTarget):
                 return atomic_file(self.path)
 
         elif mode == 'r':
+            fileobj = FileWrapper(open(self.path, 'r'))
             if self.format:
-                return self.format.pipe_reader(file(self.path))
-            else:
-                return open(self.path, mode)
+                return self.format.pipe_reader(fileobj)
+            return fileobj
         else:
             raise Exception('mode must be r/w')
 
@@ -113,6 +114,14 @@ class File(FileSystemTarget):
 
     def remove(self):
         self.fs.remove(self.path)
+
+    def copy(self, new_path, fail_if_exists=False):
+        if fail_if_exists and os.path.exists(new_path):
+            raise RuntimeError('Destination exists: %s' % new_path)
+        tmp = File(is_tmp=True)
+        tmp.open('w')
+        shutil.copy(self.path, tmp.fn)
+        tmp.move(new_path)
 
     @property
     def fn(self):

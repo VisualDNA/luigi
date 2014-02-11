@@ -12,18 +12,37 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-import unittest
+from calendar import timegm
+from datetime import datetime
+import getpass
+try:
+    import unittes2 as unittest
+except ImportError:
+    import unittest
 import luigi
 from luigi import hdfs
-from luigi.hdfs import client
-import luigi.target
+import mock
+import re
 
 
 class TestException(Exception):
     pass
 
 
-class ErrorHandling(unittest.TestCase):
+class HdfsTestCase(unittest.TestCase):
+    def setUp(self):
+        self.fs = hdfs.client
+
+    @staticmethod
+    def _test_dir():
+        return '/tmp/luigi_tmp_testdir_%s' % getpass.getuser()
+    
+    @staticmethod
+    def _test_file(suffix=""):
+        return '%s/luigi_tmp_testfile%s' % (HdfsTestCase._test_dir(), suffix)
+
+
+class ErrorHandling(HdfsTestCase):
     def test_connection_refused(self):
         """ The point of this test is to see if file existence checks
         can distinguish file non-existence from errors
@@ -32,78 +51,88 @@ class ErrorHandling(unittest.TestCase):
         """
         self.assertRaises(
             hdfs.HDFSCliError,
-            hdfs.exists,
+            self.fs.exists,
             'hdfs://127.0.0.1:0/foo'
         )
 
     def test_mkdir_exists(self):
-        path = "/tmp/luigi_hdfs_testdir"
-        if not hdfs.exists(path):
-            hdfs.mkdir(path)
-        self.assertTrue(hdfs.exists(path))
+        path = self._test_dir()
+        if not self.fs.exists(path):
+            self.fs.mkdir(path)
+        self.assertTrue(self.fs.exists(path))
         self.assertRaises(
             luigi.target.FileAlreadyExists,
-            hdfs.mkdir,
+            self.fs.mkdir,
             path
         )
-        hdfs.remove(path, skip_trash=True)
+        self.fs.remove(path, skip_trash=True)
 
 
-class AtomicHdfsOutputPipeTests(unittest.TestCase):
+class AtomicHdfsOutputPipeTests(HdfsTestCase):
     def test_atomicity(self):
-        testpath = "luigi_hdfs_testfile"
-        if hdfs.exists(testpath):
-            hdfs.remove(testpath, skip_trash=True)
+        testpath = self._test_dir()
+        if self.fs.exists(testpath):
+            self.fs.remove(testpath, skip_trash=True)
 
         pipe = hdfs.HdfsAtomicWritePipe(testpath)
-        self.assertFalse(hdfs.exists(testpath))
+        self.assertFalse(self.fs.exists(testpath))
         pipe.close()
-        self.assertTrue(hdfs.exists(testpath))
+        self.assertTrue(self.fs.exists(testpath))
 
     def test_with_close(self):
-        testpath = "luigi_hdfs_testfile"
-        if hdfs.exists(testpath):
-            hdfs.remove(testpath, skip_trash=True)
+        testpath = self._test_file()
+        try:
+            if self.fs.exists(testpath):
+                self.fs.remove(testpath, skip_trash=True)
+        except:
+            if self.fs.exists(self._test_dir()):
+                self.fs.remove(self._test_dir(), skip_trash=True)
 
         with hdfs.HdfsAtomicWritePipe(testpath) as fobj:
             fobj.write('hej')
 
-        self.assertTrue(hdfs.exists(testpath))
+        self.assertTrue(self.fs.exists(testpath))
 
     def test_with_noclose(self):
-        testpath = "luigi_hdfs_testfile"
-        if hdfs.exists(testpath):
-            hdfs.remove(testpath, skip_trash=True)
+        testpath = self._test_file()
+        try:
+            if self.fs.exists(testpath):
+                self.fs.remove(testpath, skip_trash=True)
+        except:
+            if self.fs.exists(self._test_dir()):
+                self.fs.remove(self._test_dir(), skip_trash=True)
 
         def foo():
             with hdfs.HdfsAtomicWritePipe(testpath) as fobj:
                 fobj.write('hej')
                 raise TestException('Test triggered exception')
         self.assertRaises(TestException, foo)
-        self.assertFalse(hdfs.exists(testpath))
+        self.assertFalse(self.fs.exists(testpath))
 
 
-class HdfsAtomicWriteDirPipeTests(unittest.TestCase):
+class HdfsAtomicWriteDirPipeTests(HdfsTestCase):
     def setUp(self):
-        self.path = "luigi_hdfs_testfile"
-        if hdfs.exists(self.path):
-            hdfs.remove(self.path, skip_trash=True)
+        super(HdfsAtomicWriteDirPipeTests, self).setUp()
+        self.path = self._test_file()
+        if self.fs.exists(self.path):
+            self.fs.remove(self.path, skip_trash=True)
 
     def test_atomicity(self):
         pipe = hdfs.HdfsAtomicWriteDirPipe(self.path)
-        self.assertFalse(hdfs.exists(self.path))
+        self.assertFalse(self.fs.exists(self.path))
         pipe.close()
-        self.assertTrue(hdfs.exists(self.path))
+        self.assertTrue(self.fs.exists(self.path))
 
     def test_readback(self):
         pipe = hdfs.HdfsAtomicWriteDirPipe(self.path)
-        self.assertFalse(hdfs.exists(self.path))
+        self.assertFalse(self.fs.exists(self.path))
         pipe.write("foo\nbar")
         pipe.close()
         self.assertTrue(hdfs.exists(self.path))
-        dirlist = tuple(hdfs.listdir(self.path))
+        dirlist = hdfs.listdir(self.path)
         datapath = '%s/data' % self.path
-        self.assertEquals(dirlist, (datapath,))
+        returnlist = [d for d in dirlist]
+        self.assertTrue(returnlist[0].endswith(datapath))
         pipe = hdfs.HdfsReadPipe(datapath)
         self.assertEqual(pipe.read(), "foo\nbar")
 
@@ -111,7 +140,7 @@ class HdfsAtomicWriteDirPipeTests(unittest.TestCase):
         with hdfs.HdfsAtomicWritePipe(self.path) as fobj:
             fobj.write('hej')
 
-        self.assertTrue(hdfs.exists(self.path))
+        self.assertTrue(self.fs.exists(self.path))
 
     def test_with_noclose(self):
         def foo():
@@ -119,14 +148,15 @@ class HdfsAtomicWriteDirPipeTests(unittest.TestCase):
                 fobj.write('hej')
                 raise TestException('Test triggered exception')
         self.assertRaises(TestException, foo)
-        self.assertFalse(hdfs.exists(self.path))
+        self.assertFalse(self.fs.exists(self.path))
 
 
-class _HdfsFormatTest(unittest.TestCase):
+# This class is a mixin, and does not inherit from TestCase, in order to avoid running the base class as a test case.
+class _HdfsFormatTest(object):
     format = None  # override with luigi.format.Format subclass
 
     def setUp(self):
-        self.target = hdfs.HdfsTarget("luigi_hdfs_testfile", format=self.format)
+        self.target = hdfs.HdfsTarget(self._test_file(), format=self.format)
         if self.target.exists():
             self.target.remove(skip_trash=True)
 
@@ -145,11 +175,11 @@ class _HdfsFormatTest(unittest.TestCase):
         self.assertFalse(self.target.exists())
 
 
-class PlainFormatTest(_HdfsFormatTest):
+class PlainFormatTest(_HdfsFormatTest, HdfsTestCase):
     format = hdfs.Plain
 
 
-class PlainDirFormatTest(_HdfsFormatTest):
+class PlainDirFormatTest(_HdfsFormatTest, HdfsTestCase):
     format = hdfs.PlainDir
 
     def test_multifile(self):
@@ -171,29 +201,29 @@ class PlainDirFormatTest(_HdfsFormatTest):
         self.assertEqual(tuple(parts), ('bar', 'foo'))
 
 
-class HdfsTargetTests(unittest.TestCase):
+class HdfsTargetTests(HdfsTestCase):
 
     def test_slow_exists(self):
-        target = hdfs.HdfsTarget("luigi_hdfs_testfile")
+        target = hdfs.HdfsTarget(self._test_file())
         try:
             target.remove(skip_trash=True)
         except:
             pass
 
-        self.assertFalse(hdfs.exists(target.path))
+        self.assertFalse(self.fs.exists(target.path))
         target.open("w").close()
-        self.assertTrue(hdfs.exists(target.path))
+        self.assertTrue(self.fs.exists(target.path))
 
         def should_raise():
-            hdfs.exists("hdfs://doesnotexist/foo")
+            self.fs.exists("hdfs://doesnotexist/foo")
         self.assertRaises(hdfs.HDFSCliError, should_raise)
 
         def should_raise_2():
-            hdfs.exists("hdfs://_doesnotexist_/foo")
+            self.fs.exists("hdfs://_doesnotexist_/foo")
         self.assertRaises(hdfs.HDFSCliError, should_raise_2)
 
     def test_atomicity(self):
-        target = hdfs.HdfsTarget("luigi_hdfs_testfile")
+        target = hdfs.HdfsTarget(self._test_file())
         if target.exists():
             target.remove(skip_trash=True)
 
@@ -203,7 +233,7 @@ class HdfsTargetTests(unittest.TestCase):
         self.assertTrue(target.exists())
 
     def test_readback(self):
-        target = hdfs.HdfsTarget("luigi_hdfs_testfile")
+        target = hdfs.HdfsTarget(self._test_file())
         if target.exists():
             target.remove(skip_trash=True)
 
@@ -217,7 +247,7 @@ class HdfsTargetTests(unittest.TestCase):
         self.assertEqual(origdata, data)
 
     def test_with_close(self):
-        target = hdfs.HdfsTarget("luigi_hdfs_testfile")
+        target = hdfs.HdfsTarget(self._test_file())
         if target.exists():
             target.remove(skip_trash=True)
 
@@ -227,7 +257,7 @@ class HdfsTargetTests(unittest.TestCase):
         self.assertTrue(target.exists())
 
     def test_with_exception(self):
-        target = hdfs.HdfsTarget("luigi_hdfs_testfile")
+        target = hdfs.HdfsTarget(self._test_file())
         if target.exists():
             target.remove(skip_trash=True)
 
@@ -239,19 +269,19 @@ class HdfsTargetTests(unittest.TestCase):
         self.assertFalse(target.exists())
 
     def test_create_parents(self):
-        parent = "luigi_hdfs_testdir"
+        parent = self._test_dir()
         target = hdfs.HdfsTarget("%s/testfile" % parent)
-        if hdfs.exists(parent):
-            hdfs.remove(parent, skip_trash=True)
-        self.assertFalse(hdfs.exists(parent))
+        if self.fs.exists(parent):
+            self.fs.remove(parent, skip_trash=True)
+        self.assertFalse(self.fs.exists(parent))
         fobj = target.open('w')
         fobj.write('lol\n')
         fobj.close()
-        self.assertTrue(hdfs.exists(parent))
+        self.assertTrue(self.fs.exists(parent))
         self.assertTrue(target.exists())
 
     def test_tmp_cleanup(self):
-        path = "luigi_hdfs_testfile"
+        path = self._test_file()
         target = hdfs.HdfsTarget(path, is_tmp=True)
         if target.exists():
             target.remove(skip_trash=True)
@@ -261,7 +291,7 @@ class HdfsTargetTests(unittest.TestCase):
         del target
         import gc
         gc.collect()
-        self.assertFalse(hdfs.exists(path))
+        self.assertFalse(self.fs.exists(path))
 
     def test_luigi_tmp(self):
         target = hdfs.HdfsTarget(is_tmp=True)
@@ -272,7 +302,7 @@ class HdfsTargetTests(unittest.TestCase):
 
     def test_tmp_move(self):
         target = hdfs.HdfsTarget(is_tmp=True)
-        target2 = hdfs.HdfsTarget("luigi_hdfs_testdir")
+        target2 = hdfs.HdfsTarget(self._test_file())
         if target2.exists():
             target2.remove(skip_trash=True)
         with target.open('w'):
@@ -283,8 +313,8 @@ class HdfsTargetTests(unittest.TestCase):
         self.assertTrue(target2.exists())
 
     def test_rename_no_parent(self):
-        if hdfs.exists("foo"):
-            hdfs.remove("foo", skip_trash=True)
+        if self.fs.exists("foo"):
+            self.fs.remove("foo", skip_trash=True)
 
         target1 = hdfs.HdfsTarget(is_tmp=True)
         target2 = hdfs.HdfsTarget("foo/bar")
@@ -296,13 +326,13 @@ class HdfsTargetTests(unittest.TestCase):
         self.assertTrue(target2.exists())
 
     def test_glob_exists(self):
-        target = hdfs.HdfsTarget("luigi_hdfs_testdir")
-        if target.exists():
-            target.remove(skip_trash=True)
-        hdfs.mkdir(target.path)
-        t1 = hdfs.HdfsTarget(target.path + "/part-00001")
-        t2 = hdfs.HdfsTarget(target.path + "/part-00002")
-        t3 = hdfs.HdfsTarget(target.path + "/another")
+        target_dir = hdfs.HdfsTarget(self._test_dir())
+        if target_dir.exists():
+            target_dir.remove(skip_trash=True)
+        self.fs.mkdir(target_dir.path)
+        t1 = hdfs.HdfsTarget(target_dir.path + "/part-00001")
+        t2 = hdfs.HdfsTarget(target_dir.path + "/part-00002")
+        t3 = hdfs.HdfsTarget(target_dir.path + "/another")
 
         with t1.open('w') as f:
             f.write('foo\n')
@@ -311,30 +341,32 @@ class HdfsTargetTests(unittest.TestCase):
         with t3.open('w') as f:
             f.write('biz\n')
 
-        files = hdfs.HdfsTarget("luigi_hdfs_testdir/part-0000*")
+        files = hdfs.HdfsTarget("%s/part-0000*" % target_dir.path)
 
-        self.assertEqual(files.glob_exists(2), True)
-        self.assertEqual(files.glob_exists(3), False)
-        self.assertEqual(files.glob_exists(1), False)
+        self.assertTrue(files.glob_exists(2))
+        self.assertFalse(files.glob_exists(3))
+        self.assertFalse(files.glob_exists(1))
 
 
-class _HdfsClientTest(unittest.TestCase):
+TIMESTAMP_DELAY = 60 # Big enough for `hadoop fs`?
+class _HdfsClientTest(HdfsTestCase):
 
     def create_file(self, target):
         fobj = target.open("w")
         fobj.close()
 
-    def put_file(self, local_target, local_filename, target_path):
+    def put_file(self, local_target, local_filename, target_path, delpath=True):
         if local_target.exists():
-            local_target.remove(skip_trash=True)
+            local_target.remove()
         self.create_file(local_target)
 
-        target = hdfs.HdfsTarget(target_path)
-        if target.exists():
-            target.remove(skip_trash=True)
-        hdfs.mkdir(target.path)
+        if delpath:
+            target = hdfs.HdfsTarget(target_path)
+            if target.exists():
+                target.remove(skip_trash=True)
+            self.fs.mkdir(target.path)
 
-        client.put(local_target.path, target_path)
+        self.fs.put(local_target.path, target_path)
         target_file_path = target_path + "/" + local_filename
         return hdfs.HdfsTarget(target_file_path)
 
@@ -342,31 +374,31 @@ class _HdfsClientTest(unittest.TestCase):
         local_dir = "test/data"
         local_filename = "file1.dat"
         local_path = "%s/%s" % (local_dir, local_filename)
-        target_path = "luigi_hdfs_testdir"
+        target_path = self._test_dir()
 
         local_target = luigi.LocalTarget(local_path)
         target = self.put_file(local_target, local_filename, target_path)
         self.assertTrue(target.exists())
-        local_target.remove(skip_trash=True)
+        local_target.remove()
 
     def test_get(self):
         local_dir = "test/data"
         local_filename = "file1.dat"
         local_path = "%s/%s" % (local_dir, local_filename)
-        target_path = "luigi_hdfs_testdir"
+        target_path = self._test_dir()
 
         local_target = luigi.LocalTarget(local_path)
         target = self.put_file(local_target, local_filename, target_path)
         self.assertTrue(target.exists())
-        local_target.remove(skip_trash=True)
+        local_target.remove()
 
         local_copy_path = "%s/file1.dat.cp" % local_dir
         local_copy = luigi.LocalTarget(local_copy_path)
         if local_copy.exists():
-            local_copy.remove(skip_trash=True)
-        client.get(target.path, local_copy_path)
+            local_copy.remove()
+        self.fs.get(target.path, local_copy_path)
         self.assertTrue(local_copy.exists())
-        local_copy.remove(skip_trash=True)
+        local_copy.remove()
 
     def test_getmerge(self):
         local_dir = "test/data"
@@ -374,30 +406,226 @@ class _HdfsClientTest(unittest.TestCase):
         local_path1 = "%s/%s" % (local_dir, local_filename1)
         local_filename2 = "file2.dat"
         local_path2 = "%s/%s" % (local_dir, local_filename2)
-        target_dir = "luigi_hdfs_testdir"
+        target_dir = self._test_dir()
 
         local_target1 = luigi.LocalTarget(local_path1)
         target1 = self.put_file(local_target1, local_filename1, target_dir)
         self.assertTrue(target1.exists())
-        local_target1.remove(skip_trash=True)
+        local_target1.remove()
 
         local_target2 = luigi.LocalTarget(local_path2)
         target2 = self.put_file(local_target2, local_filename2, target_dir)
         self.assertTrue(target2.exists())
-        local_target2.remove(skip_trash=True)
+        local_target2.remove()
 
         local_copy_path = "%s/file.dat.cp" % (local_dir)
         local_copy = luigi.LocalTarget(local_copy_path)
         if local_copy.exists():
-            local_copy.remove(skip_trash=True)
-        client.getmerge(target_dir, local_copy_path)
+            local_copy.remove()
+        self.fs.getmerge(target_dir, local_copy_path)
         self.assertTrue(local_copy.exists())
-        local_copy.remove(skip_trash=True)
+        local_copy.remove()
 
         local_copy_crc_path = "%s/.file.dat.cp.crc" % (local_dir)
         local_copy_crc = luigi.LocalTarget(local_copy_crc_path)
         self.assertTrue(local_copy_crc.exists())
-        local_copy_crc.remove(skip_trash=True)
+        local_copy_crc.remove()
+
+    def _setup_listdir(self):
+        """Create the test directory, and things in it."""
+        target_dir = self._test_dir()
+        local_dir = "test/data"
+
+        local_filename1 = "file1.dat"
+        local_path1 = "%s/%s" % (local_dir, local_filename1)
+        local_target1 = luigi.LocalTarget(local_path1)
+        target1 = self.put_file(local_target1, local_filename1, target_dir)
+        self.assertTrue(target1.exists())
+
+        local_filename2 = "file2.dat"
+        local_path2 = "%s/%s" % (local_dir, local_filename2)
+        local_target2 = luigi.LocalTarget(local_path2)
+        target2 = self.put_file(local_target2, local_filename2,
+                                target_dir, delpath=False)
+        self.assertTrue(target2.exists())
+
+        local_filename3 = "file3.dat"
+        local_path3 = "%s/%s" % (local_dir, local_filename3)
+        local_target3 = luigi.LocalTarget(local_path3)
+        target3 = self.put_file(local_target3, local_filename3,
+                                target_dir + '/sub1')
+        self.assertTrue(target3.exists())
+
+        local_filename4 = "file4.dat"
+        local_path4 = "%s/%s" % (local_dir, local_filename4)
+        local_target4 = luigi.LocalTarget(local_path4)
+        target4 = self.put_file(local_target4, local_filename4,
+                                target_dir + '/sub2')
+        self.assertTrue(target4.exists())
+
+        return target_dir
+
+    def test_listdir_base_list(self):
+        """Verify we get the base four items created by _setup_listdir()"""
+        path = self._setup_listdir()
+        dirlist = self.fs.listdir(path, ignore_directories=False,
+                                  ignore_files=False, include_size=False,
+                                  include_type=False, include_time=False,
+                                  recursive=False)
+        entries = [dd for dd in dirlist]
+        self.assertEquals(4, len(entries), msg="%r" % entries)
+        self.assertEquals(path + '/file1.dat', entries[0], msg="%r" % entries)
+        self.assertEquals(path + '/file2.dat', entries[1], msg="%r" % entries)
+        self.assertEquals(path + '/sub1', entries[2], msg="%r" % entries)
+        self.assertEquals(path + '/sub2', entries[3], msg="%r" % entries)
+
+    def test_listdir_base_list_files_only(self):
+        """Verify we get the base two files created by _setup_listdir()"""
+        path = self._setup_listdir()
+        dirlist = self.fs.listdir(path, ignore_directories=True,
+                                  ignore_files=False, include_size=False,
+                                  include_type=False, include_time=False,
+                                  recursive=False)
+        entries = [dd for dd in dirlist]
+        self.assertEquals(2, len(entries), msg="%r" % entries)
+        self.assertEquals(path + '/file1.dat', entries[0], msg="%r" % entries)
+        self.assertEquals(path + '/file2.dat', entries[1], msg="%r" % entries)
+
+    def test_listdir_base_list_dirs_only(self):
+        """Verify we get the base two directories created by _setup_listdir()"""
+        path = self._setup_listdir()
+        dirlist = self.fs.listdir(path, ignore_directories=False,
+                                  ignore_files=True, include_size=False,
+                                  include_type=False, include_time=False,
+                                  recursive=False)
+        entries = [dd for dd in dirlist]
+        self.assertEquals(2, len(entries), msg="%r" % entries)
+        self.assertEquals(path + '/sub1', entries[0], msg="%r" % entries)
+        self.assertEquals(path + '/sub2', entries[1], msg="%r" % entries)
+
+    def test_listdir_base_list_recusion(self):
+        """Verify we get the every item created by _setup_listdir()"""
+        path = self._setup_listdir()
+        dirlist = self.fs.listdir(path, ignore_directories=False,
+                                  ignore_files=False, include_size=False,
+                                  include_type=False, include_time=False,
+                                  recursive=True)
+        entries = [dd for dd in dirlist]
+        self.assertEquals(6, len(entries), msg="%r" % entries)
+        self.assertEquals(path + '/file1.dat', entries[0], msg="%r" % entries)
+        self.assertEquals(path + '/file2.dat', entries[1], msg="%r" % entries)
+        self.assertEquals(path + '/sub1', entries[2], msg="%r" % entries)
+        self.assertEquals(path + '/sub1/file3.dat', entries[3], msg="%r" % entries)
+        self.assertEquals(path + '/sub2', entries[4], msg="%r" % entries)
+        self.assertEquals(path + '/sub2/file4.dat', entries[5], msg="%r" % entries)
+
+    def test_listdir_base_list_get_sizes(self):
+        """Verify we get sizes for the two base files."""
+        path = self._setup_listdir()
+        dirlist = self.fs.listdir(path, ignore_directories=False,
+                                  ignore_files=False, include_size=True,
+                                  include_type=False, include_time=False,
+                                  recursive=False)
+        entries = [dd for dd in dirlist]
+        self.assertEquals(4, len(entries), msg="%r" % entries)
+        self.assertEquals(2, len(entries[0]), msg="%r" % entries)
+        self.assertEquals(path + '/file1.dat', entries[0][0], msg="%r" % entries)
+        self.assertEquals(0, entries[0][1], msg="%r" % entries)
+        self.assertEquals(2, len(entries[1]), msg="%r" % entries)
+        self.assertEquals(path + '/file2.dat', entries[1][0], msg="%r" % entries)
+        self.assertEquals(0, entries[1][1], msg="%r" % entries)
+
+    def test_listdir_base_list_get_types(self):
+        """Verify we get the types for the four base items."""
+        path = self._setup_listdir()
+        dirlist = self.fs.listdir(path, ignore_directories=False,
+                                  ignore_files=False, include_size=False,
+                                  include_type=True, include_time=False,
+                                  recursive=False)
+        entries = [dd for dd in dirlist]
+        self.assertEquals(4, len(entries), msg="%r" % entries)
+        self.assertEquals(2, len(entries[0]), msg="%r" % entries)
+        self.assertEquals(path + '/file1.dat', entries[0][0], msg="%r" % entries)
+        self.assertTrue(re.match(r'[-f]', entries[0][1]), msg="%r" % entries)
+        self.assertEquals(2, len(entries[1]), msg="%r" % entries)
+        self.assertEquals(path + '/file2.dat', entries[1][0], msg="%r" % entries)
+        self.assertTrue(re.match(r'[-f]', entries[1][1]), msg="%r" % entries)
+        self.assertEquals(2, len(entries[2]), msg="%r" % entries)
+        self.assertEquals(path + '/sub1', entries[2][0], msg="%r" % entries)
+        self.assertEquals('d', entries[2][1], msg="%r" % entries)
+        self.assertEquals(2, len(entries[3]), msg="%r" % entries)
+        self.assertEquals(path + '/sub2', entries[3][0], msg="%r" % entries)
+        self.assertEquals('d', entries[3][1], msg="%r" % entries)
+
+    def test_listdir_base_list_get_times(self):
+        """Verify we get the times, even if we can't fully check them."""
+        path = self._setup_listdir()
+        dirlist = self.fs.listdir(path, ignore_directories=False,
+                                  ignore_files=False, include_size=False,
+                                  include_type=False, include_time=True,
+                                  recursive=False)
+        entries = [dd for dd in dirlist]
+        self.assertEquals(4, len(entries), msg="%r" % entries)
+        self.assertEquals(2, len(entries[0]), msg="%r" % entries)
+        self.assertEquals(path + '/file1.dat', entries[0][0], msg="%r" % entries)
+        self.assertTrue(timegm(datetime.now().timetuple()) -
+                        timegm(entries[0][1].timetuple()) < TIMESTAMP_DELAY) 
+
+    def test_listdir_full_list_get_everything(self):
+        """Verify we get all the values, even if we can't fully check them."""
+        path = self._setup_listdir()
+        dirlist = self.fs.listdir(path, ignore_directories=False,
+                                  ignore_files=False, include_size=True,
+                                  include_type=True, include_time=True,
+                                  recursive=True)
+        entries = [dd for dd in dirlist]
+        self.assertEquals(6, len(entries), msg="%r" % entries)
+        self.assertEquals(4, len(entries[0]), msg="%r" % entries)
+        self.assertEquals(path + '/file1.dat', entries[0][0], msg="%r" % entries)
+        self.assertEquals(0, entries[0][1], msg="%r" % entries)
+        self.assertTrue(re.match(r'[-f]', entries[0][2]), msg="%r" % entries)
+        self.assertTrue(timegm(datetime.now().timetuple()) -
+                        timegm(entries[0][3].timetuple()) < TIMESTAMP_DELAY)
+        self.assertEquals(4, len(entries[1]), msg="%r" % entries)
+        self.assertEquals(path + '/file2.dat', entries[1][0], msg="%r" % entries)
+        self.assertEquals(4, len(entries[2]), msg="%r" % entries)
+        self.assertEquals(path + '/sub1', entries[2][0], msg="%r" % entries)
+        self.assertEquals(4, len(entries[3]), msg="%r" % entries)
+        self.assertEquals(path + '/sub1/file3.dat', entries[3][0], msg="%r" % entries)
+        self.assertEquals(4, len(entries[4]), msg="%r" % entries)
+        self.assertEquals(path + '/sub2', entries[4][0], msg="%r" % entries)
+        self.assertEquals(4, len(entries[5]), msg="%r" % entries)
+        self.assertEquals(path + '/sub2/file4.dat', entries[5][0], msg="%r" % entries)
+
+    @mock.patch('luigi.hdfs.call_check')
+    def test_cdh3_client(self, call_check):
+        cdh3_client = luigi.hdfs.HdfsClientCdh3()
+        cdh3_client.remove("/some/path/here")
+        call_check.assert_called_once_with(['hadoop', 'fs', '-rmr', '/some/path/here'])
+
+        cdh3_client.remove("/some/path/here", recursive=False)
+        self.assertEquals(mock.call(['hadoop', 'fs', '-rm', '/some/path/here']), call_check.call_args_list[-1])
+
+    @mock.patch('subprocess.Popen')
+    def test_apache1_client(self, popen):
+        comm = mock.Mock(name='communicate_mock')
+        comm.return_value = "some return stuff", ""
+
+        preturn = mock.Mock(name='open_mock')
+        preturn.returncode = 0
+        preturn.communicate = comm
+        popen.return_value = preturn
+
+        apache_client = luigi.hdfs.HdfsClientApache1()
+        returned = apache_client.exists("/some/path/somewhere")
+        self.assertTrue(returned)
+
+        preturn.returncode = 1
+        returned = apache_client.exists("/some/path/somewhere")
+        self.assertFalse(returned)
+
+        preturn.returncode = 13
+        self.assertRaises(luigi.hdfs.HDFSCliError, apache_client.exists, "/some/path/somewhere")
 
 if __name__ == "__main__":
     unittest.main()

@@ -89,6 +89,18 @@ class WordFreqJob(TestJobTask):
         return File("luigitest-2")
 
 
+class MapOnlyJob(TestJobTask):
+    def mapper(self, line):
+        for word in line.strip().split():
+            yield (word,)
+
+    def requires_hadoop(self):
+        return Words()
+
+    def output(self):
+        return File("luigitest-3")
+
+
 class HadoopJobTest(unittest.TestCase):
     def setUp(self):
         MockFile._file_contents = {}
@@ -110,8 +122,16 @@ class HadoopJobTest(unittest.TestCase):
         c = self.read_output(File('luigitest-2'))
         self.assertAlmostEquals(float(c['jk']), 6.0 / 33.0)
 
+    def test_map_only(self):
+        luigi.build([MapOnlyJob()], local_scheduler=True)
+        c = []
+        for line in File('luigitest-3').open('r'):
+            c.append(line.strip())
+        self.assertEquals(c[0], 'kj')
+        self.assertEquals(c[4], 'ljoi')
+
     def test_run_hadoop_job_failure(self):
-        def Popen_fake(arglist, stdout=None, stderr=None):
+        def Popen_fake(arglist, stdout=None, stderr=None, env=None, close_fds=True):
             class P(object):
                 def wait(self):
                     pass
@@ -149,7 +169,7 @@ class HadoopJobTest(unittest.TestCase):
         # Will attempt to run a real hadoop job, but we will secretly mock subprocess.Popen
         arglist_result = []
 
-        def Popen_fake(arglist, stdout=None, stderr=None):
+        def Popen_fake(arglist, stdout=None, stderr=None, env=None, close_fds=True):
             arglist_result.append(arglist)
 
             class P(object):
@@ -165,14 +185,13 @@ class HadoopJobTest(unittest.TestCase):
 
         h, p = luigi.hdfs.HdfsTarget, subprocess.Popen
         luigi.hdfs.HdfsTarget, subprocess.Popen = MockFile, Popen_fake
-        MockFile.move = lambda *args, **kwargs: None
-
-        WordCountJobReal().run()
-
-        luigi.hdfs.HdfsTarget, subprocess.Popen = h, p  # restore
-
-        self.assertEquals(len(arglist_result), 1)
-        self.assertEquals(arglist_result[0][0:3], ['hadoop', 'jar', 'test.jar'])
+        try:
+            MockFile.move = lambda *args, **kwargs: None
+            WordCountJobReal().run()
+            self.assertEquals(len(arglist_result), 1)
+            self.assertEquals(arglist_result[0][0:3], ['hadoop', 'jar', 'test.jar'])
+        finally:
+            luigi.hdfs.HdfsTarget, subprocess.Popen = h, p  # restore
 
 
 class FailingJobException(Exception):
